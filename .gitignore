@@ -1,0 +1,59 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Virtual Environment
+venv/
+env/
+.env/
+
+# IDE specific files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Game specific
+saves/
+*.save
+*.log
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# STK-specific files
+stk-0_9_3/
+!stk-0_9_3/.gitkeep
+
+# Build directories
+build*/
+bld*/
+cmake_build*/
+
+# Generated files
+*.o
+*.a
+*.so
+*.dll
+*.exe
+*.dylib
+
+# User-specific files
+.config/
+*.log
+*.user
+*.save
+
+# OS generated files
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db 
