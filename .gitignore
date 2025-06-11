@@ -3,7 +3,13 @@ __pycache__/
 *.pyc
 
 # STK
-stk-0_9_3/
+stk-1_2/
 
 # Virtual environment
 venv/
+
+ppo_*
+dashboards/
+logs/
+figures/
+

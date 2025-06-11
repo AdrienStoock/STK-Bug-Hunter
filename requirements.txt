@@ -1,21 +1,11 @@
-# Deep RL lib
-stable-baselines3[extra]==2.2.1
-
-# Gymnasium compatible avec SB3
-gymnasium==0.29.1
-
-# Environnement SuperTuxKart (optionnel, si tu ne l’utilises pas, commente-le)
-pystk2-gymnasium
-
-# Librairies de base pour science des données
-numpy==1.26.4             # Compatible avec TensorFlow 2.19.0
-matplotlib==3.7.1         # Compatible avec numpy 1.26.x
-
-# Deep Learning
-tensorflow==2.19.0        # Nécessite numpy <2.2.0
-
-# Pour le rendu (images, vidéo, etc.)
+stable-baselines3>=2.0.0
+gymnasium>=0.29.0
+wandb>=0.15.0
+torch>=2.0.0
+numpy>=1.21.0
+pystk2-gymnasium>=0.1.0
+matplotlib==3.7.1
+tensorflow==2.19.0
 opencv-python
-
-# Visualisation TensorBoard (facultatif)
 tensorboard
+wandb
