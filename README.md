@@ -7,9 +7,9 @@ To make it easy for you to get started with the project, follow the next step
 
 ## Prepare the environment 
 
-- [ ] [Install python3] (https://www.python.org/downloads/)
+- [ ] [Install python3](https://www.python.org/downloads/)
 - [ ] [Clone https](https://gitlab.com/Adrien-Stoock/ml_videogame.git) or [Clone ssh](git@gitlab.com:Adrien-Stoock/ml_videogame.git) 
-- [ ] [Create the venv]:
+- [ ] Create the venv:
 
 ```
 python -m venv my_project
