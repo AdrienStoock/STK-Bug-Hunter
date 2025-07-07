@@ -1,5 +1,4 @@
 # drl_stk.py
-
 import os
 import numpy as np
 import gymnasium as gym
@@ -10,7 +9,8 @@ import datetime
 from typing import List
 from gymnasium import spaces
 from pystk2_gymnasium.wrappers import FlattenerWrapper
-from block_detection_wrapper import FPSDetectionWrapper
+from bug_detection_wrapper import FPSDetectionWrapper
+from stable_baselines3.common.callbacks import EvalCallback
 
 
 class AgentVariant:
@@ -19,7 +19,7 @@ class AgentVariant:
         self.learning_rate = learning_rate
         self.n_steps = n_steps
         self.ent_coef = ent_coef
-        self.clip_range = clip_range
+        self.clip_range = clip_range  # (PPO)contrôle jusqu'à quel point la nouvelle politique (policy) peut s'écarter de l'ancienne
 
 
 class STKActionWrapper(gym.ActionWrapper):
@@ -124,14 +124,14 @@ def create_agent_variants() -> List[AgentVariant]:
         AgentVariant(
             "explorer",
             learning_rate=1e-4,
-            n_steps=2048,
+            n_steps=1024,
             ent_coef=0.01,
             clip_range=0.2
         )
     ]
 
 
-def train_single_agent(env: gym.Env, agent_variant: AgentVariant, total_timesteps: int, save_path: str):
+def train_single_agent(env: gym.Env, agent_variant: AgentVariant, total_timesteps: int, save_path: str, track: str):
     print(f"✨ Nouveau modèle : {agent_variant.name}")
     model = PPO(
         "MultiInputPolicy",
@@ -140,10 +140,27 @@ def train_single_agent(env: gym.Env, agent_variant: AgentVariant, total_timestep
         n_steps=agent_variant.n_steps,
         ent_coef=agent_variant.ent_coef,
         clip_range=agent_variant.clip_range,
+        tensorboard_log=f"./logs/{agent_variant.name}_{track}",
         verbose=1
     )
 
-    model.learn(total_timesteps=total_timesteps, progress_bar=True)
+    eval_callback = EvalCallback(
+        env,
+        best_model_save_path=f"./models/{agent_variant.name}_{track}",
+        log_path=f"./logs/{agent_variant.name}_{track}",
+        eval_freq=5000,
+        n_eval_episodes=1,
+        deterministic=True,
+        render=False
+    )
+
+    model.learn(
+        total_timesteps=total_timesteps,
+        tb_log_name="PPO",
+        callback=eval_callback,
+        progress_bar=True
+    )
+
 
 
 import pystk2_gymnasium
@@ -155,8 +172,9 @@ def main():
 
     agent_variants = create_agent_variants()
 
-    temp_env = gym.make("supertuxkart/full-v0", agent=AgentSpec(use_ai=True))
+    temp_env = gym.make("supertuxkart/full-v0", agent=AgentSpec(use_ai=False))
     all_tracks = temp_env.unwrapped.TRACKS
+    all_tracks = ['black_forest']
     temp_env.close()
 
     for track in all_tracks:
@@ -165,17 +183,18 @@ def main():
             print(f"🚗 Agent : {agent_variant.name}")
             env = gym.make(
                 "supertuxkart/full-v0",
-                render_mode=None,
-                agent=AgentSpec(use_ai=True),
-                track=track
+                render_mode="human",
+                agent=AgentSpec(use_ai=False),
+                track=track  
             )
             env = FPSDetectionWrapper(env, track_name=track)
             env = STKObservationWrapper(env)
             env = STKActionWrapper(env)
             env = Monitor(env)
 
-            train_single_agent(env, agent_variant, total_timesteps, f"{save_path}_{track}")
+            train_single_agent(env, agent_variant, total_timesteps , f"{save_path}_{track}", track)
             env.close()
+
 
 if __name__ == "__main__":
     main()

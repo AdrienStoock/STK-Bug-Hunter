@@ -1,3 +1,4 @@
+# bug_logger.py
 import json
 import datetime
 from typing import Dict, Any
@@ -28,6 +29,10 @@ class BugLogger:
             kart_position (Dict[str, float]): Position du kart au moment du bug {"x": float, "y": float, "z": float}
             additional_info (Dict[str, Any], optional): Informations supplémentaires sur le bug
         """
+        if bug_type == "fps":
+            self.bugs = []
+            self._save_logs()
+
         bug_entry = {
             "timestamp": datetime.datetime.now().isoformat(),
             "bug_type": bug_type,

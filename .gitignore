@@ -11,9 +11,13 @@ venv/
 ppo_*
 dashboards/
 logs/
-figures/
+bug_logs/
+models/
+documents/
+
 
 #cartpol 
 cartpol
-bug_logs
 
+
+^.*test.*$
