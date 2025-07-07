@@ -20,4 +20,5 @@ documents/
 cartpol
 
 
-^.*test.*$
+test.py
+test_stk.py
