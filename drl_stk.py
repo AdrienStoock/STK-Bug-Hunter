@@ -9,7 +9,8 @@ import datetime
 from typing import List
 from gymnasium import spaces
 from pystk2_gymnasium.wrappers import FlattenerWrapper
-from bug_detection_wrapper import FPSDetectionWrapper
+from bug_detection.detectors.fps_detector import FPSDetectionWrapper
+from bug_detection.detectors.stuck_detector import StuckDetectionWrapper
 from stable_baselines3.common.callbacks import EvalCallback
 
 
@@ -123,32 +124,38 @@ def create_agent_variants() -> List[AgentVariant]:
     return [
         AgentVariant(
             "explorer",
-            learning_rate=1e-4,
+            learning_rate=3e-4,
             n_steps=1024,
-            ent_coef=0.01,
-            clip_range=0.2
+            ent_coef=0.01,   # encourager l'exploration, plus il est élévé plus il explore
+            clip_range=0.2   # limite l'ampleur des maj de politiques afin d'éviter des changements trop brusques
         )
     ]
 
 
 def train_single_agent(env: gym.Env, agent_variant: AgentVariant, total_timesteps: int, save_path: str, track: str):
     print(f"✨ Nouveau modèle : {agent_variant.name}")
+    model = None
+
+    # Chargement si modèle existe déjà
+    # if os.path.exists(save_path + ".zip"):
+    #     print(f"Chargement du modèle existant : {save_path}")
+    #     model = PPO.load(save_path, env=env)
+    #else:
     model = PPO(
-        "MultiInputPolicy",
-        env,
-        learning_rate=agent_variant.learning_rate,
-        n_steps=agent_variant.n_steps,
-        ent_coef=agent_variant.ent_coef,
-        clip_range=agent_variant.clip_range,
-        tensorboard_log=f"./logs/{agent_variant.name}_{track}",
-        verbose=1
+            "MultiInputPolicy",
+            env,
+            learning_rate=agent_variant.learning_rate,
+            n_steps=agent_variant.n_steps,
+            ent_coef=agent_variant.ent_coef,
+            clip_range=agent_variant.clip_range,
+            tensorboard_log=f"./logs/{agent_variant.name}_{track}",
+            verbose=1
     )
 
     eval_callback = EvalCallback(
         env,
         best_model_save_path=f"./models/{agent_variant.name}_{track}",
         log_path=f"./logs/{agent_variant.name}_{track}",
-        eval_freq=5000,
         n_eval_episodes=1,
         deterministic=True,
         render=False
@@ -161,20 +168,95 @@ def train_single_agent(env: gym.Env, agent_variant: AgentVariant, total_timestep
         progress_bar=True
     )
 
+    # Sauvegarde après entraînement
+    model.save(save_path)
+
+    # Évaluation simple après entraînement
+    obs, _ = env.reset()
+    done = False
+    total_reward = 0
+    while not done:
+        action, _states = model.predict(obs, deterministic=True)
+        obs, reward, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
+        total_reward += reward
+    print(f"Évaluation finale sur 1 épisode : reward total = {total_reward}")
 
 
-import pystk2_gymnasium
+from gymnasium import RewardWrapper
+
+class CustomRewardWrapper(RewardWrapper):
+    def __init__(self, env):
+        super().__init__(env)
+        self.last_overall_distances = [0.0] * env.unwrapped.num_kart
+        self.last_obs = None
+        self.kart_ix = 0
+        self.visited_positions = set()
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        self.last_obs = obs
+        self.last_info = info  # stocker info pour reward()
+        return obs, reward, terminated, truncated, info
+
+    def reward(self, reward):
+        if self.last_obs is None:
+            return reward
+
+        kart = self.env.unwrapped.world.karts[self.kart_ix]
+        K = self.env.unwrapped.num_kart
+        d_t = max(0, kart.overall_distance)
+        d_t_1 = self.last_overall_distances[self.kart_ix]
+        delta_d = d_t - d_t_1
+        pos_t = kart.position
+        f_t = 1 if kart.has_finished_race else 0
+
+        # Progression
+        progression_reward = 0.1 * delta_d
+        classement_reward = (1 - pos_t / K) * (3 + 7 * f_t)
+        finish_reward = 10 * f_t
+        time_penalty = -0.1
+
+        # Exploration
+        pos = tuple(np.round(kart.position, 1))
+        if not hasattr(self, "visited_positions"):
+            self.visited_positions = set()
+        exploration_bonus = 0.0
+        if pos not in self.visited_positions:
+            self.visited_positions.add(pos)
+            exploration_bonus = 0.2  # à ajuster
+
+        # Bugs
+        bug_bonus = 0.0
+        if hasattr(self, "last_info") and self.last_info is not None:
+            if self.last_info.get('bug_detected', False):
+                bug_bonus += 50.0  # stuck
+            if self.last_info.get('collision_detected', False):
+                bug_bonus += 50.0  # collision (si tu ajoutes ce wrapper)
+
+        self.last_overall_distances[self.kart_ix] = d_t
+
+        return (
+            progression_reward +
+            classement_reward +
+            finish_reward +
+            time_penalty +
+            exploration_bonus +
+            bug_bonus
+        )
+
+
 
 def main():
-    save_path = "./ppo_stk_model"
-    total_timesteps = 2000
+    os.makedirs("data_ia", exist_ok=True)
+    total_timesteps = 10000
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
     agent_variants = create_agent_variants()
 
     temp_env = gym.make("supertuxkart/full-v0", agent=AgentSpec(use_ai=False))
     all_tracks = temp_env.unwrapped.TRACKS
-    all_tracks = ['black_forest']
+    all_tracks = ['abyss']
     temp_env.close()
 
     for track in all_tracks:
@@ -187,12 +269,16 @@ def main():
                 agent=AgentSpec(use_ai=False),
                 track=track  
             )
-            env = FPSDetectionWrapper(env, track_name=track)
+            env = StuckDetectionWrapper(env, track_name=track)
+            # env = FPSDetectionWrapper(env, track_name=track)
             env = STKObservationWrapper(env)
             env = STKActionWrapper(env)
+            #env = CustomRewardWrapper(env)
             env = Monitor(env)
 
-            train_single_agent(env, agent_variant, total_timesteps , f"{save_path}_{track}", track)
+            save_path = f"data_ia/data_PPO_{track}"
+
+            train_single_agent(env, agent_variant, total_timesteps, save_path, track)
             env.close()
 
 
