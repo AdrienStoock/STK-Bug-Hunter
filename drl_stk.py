@@ -133,30 +133,30 @@ def create_agent_variants() -> List[AgentVariant]:
 
 
 def train_single_agent(env: gym.Env, agent_variant: AgentVariant, total_timesteps: int, save_path: str, track: str):
-    print(f"✨ Nouveau modèle : {agent_variant.name}")
     model = None
 
     # Chargement si modèle existe déjà
-    # if os.path.exists(save_path + ".zip"):
-    #     print(f"Chargement du modèle existant : {save_path}")
-    #     model = PPO.load(save_path, env=env)
-    #else:
-    model = PPO(
-            "MultiInputPolicy",
-            env,
-            learning_rate=agent_variant.learning_rate,
-            n_steps=agent_variant.n_steps,
-            ent_coef=agent_variant.ent_coef,
-            clip_range=agent_variant.clip_range,
-            tensorboard_log=f"./logs/{agent_variant.name}_{track}",
-            verbose=1
-    )
+    if os.path.exists(save_path + ".zip"):
+        print(f"Chargement du modèle existant : {save_path}")
+        model = PPO.load(save_path, env=env)
+    else:
+        print(f"✨ Nouveau modèle : {agent_variant.name}")
+        model = PPO(
+                "MultiInputPolicy",
+                env,
+                learning_rate=agent_variant.learning_rate,
+                n_steps=agent_variant.n_steps,
+                ent_coef=agent_variant.ent_coef,
+                clip_range=agent_variant.clip_range,
+                tensorboard_log=f"./logs/{agent_variant.name}_{track}",
+                verbose=1
+        )
 
     eval_callback = EvalCallback(
         env,
         best_model_save_path=f"./models/{agent_variant.name}_{track}",
         log_path=f"./logs/{agent_variant.name}_{track}",
-        n_eval_episodes=1,
+        n_eval_episodes=3,
         deterministic=True,
         render=False
     )
@@ -190,73 +190,102 @@ class CustomRewardWrapper(RewardWrapper):
         super().__init__(env)
         self.last_overall_distances = [0.0] * env.unwrapped.num_kart
         self.last_obs = None
+        self.prev_obs = self.last_obs
         self.kart_ix = 0
         self.visited_positions = set()
 
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
+        self.prev_obs = self.last_obs
         self.last_obs = obs
         self.last_info = info  # stocker info pour reward()
-        return obs, reward, terminated, truncated, info
+        #print('obs : ', obs)
+        custom_reward = self.reward(reward)
+        return obs, custom_reward, terminated, truncated, info
 
     def reward(self, reward):
-        if self.last_obs is None:
+        # On ne peut pas calculer la reward sans observations précédentes
+        if self.last_obs is None or self.prev_obs is None:
+            return reward  # Pas assez de données pour comparer
+
+        try:
+            # Récupération de la distance totale parcourue (>= 0)
+            d_t = max(0, self.env.unwrapped.world.karts[self.kart_ix].overall_distance)
+            # Distance mémorisée lors du dernier calcul
+            d_t_1 = self.last_overall_distances[self.kart_ix]
+            # Différence de distance (progression entre 2 étapes)
+            delta_d = d_t - d_t_1
+
+            #print(f"[DEBUG] Distance actuelle: {d_t}, distance précédente: {d_t_1}, delta: {delta_d}")
+
+            # On tente de récupérer le pas de temps dt, sinon valeur par défaut
+            try:
+                dt = self.env.get_wrapper_attr('dt')
+            except AttributeError:
+                try:
+                    dt = self.env.unwrapped.dt
+                except AttributeError:
+                    dt = 0.1  # Valeur par défaut si impossible à récupérer
+
+            #speed_now = obs_now['continuous'][0]
+            #speed_before = obs_prev['continuous'][0]
+
+            #accel = (speed_now - speed_before) / dt if dt > 0 else 0
+
+            #center_dist = abs(obs_now['continuous'][8])
+
+            # Etat indiquant si le kart a terminé la course : 1 si oui, 0 sinon
+            finished = 1 if self.env.unwrapped.world.karts[self.kart_ix].has_finished_race else 0
+
+            # Nombre total de karts dans la course
+            K = self.env.unwrapped.num_kart
+            # Position actuelle du kart (1 = premier)
+            pos = self.env.unwrapped.world.karts[self.kart_ix].position
+            # Si la position est inconnue (None), on la considère comme la dernière
+            if pos is None:
+                pos = K - 1
+
+            # Calcul de la reward
+            # - Contribution positive liée à la progression (delta_d / 10)
+            # - Contribution liée à la position dans la course, augmentée si la course est terminée
+            # - Bonus final pour avoir terminé la course
+            # - Petit malus fixe pour éviter la stagnation
+            reward = (
+                (delta_d / 10.0) +
+                (1.0 - (pos / K)) * (3 + 7 * finished) +
+                10 * finished -
+                0.1
+            )
+
+            # Bonus/malus supplémentaires basés sur la vitesse, la distance au centre et l’accélération (désactivés)
+            # reward *= np.exp(-(speed_now - 20.0) ** 2 / 50.0)    # Plus la vitesse est proche de 20, mieux c’est
+            # reward *= np.exp(-(center_dist) ** 2 / 2.0)          # Plus on reste proche du centre de la piste, mieux c’est
+            # reward *= np.exp(-(accel) ** 2 / 30.0)               # Moins l’accélération brutale est forte, mieux c’est
+
+            # Mise à jour de la distance mémorisée pour la prochaine étape
+            self.last_overall_distances[self.kart_ix] = d_t
+
+            return reward/100
+
+        except Exception as e:
+            print(f"[ERROR] Exception dans reward(): {e}")
             return reward
 
-        kart = self.env.unwrapped.world.karts[self.kart_ix]
-        K = self.env.unwrapped.num_kart
-        d_t = max(0, kart.overall_distance)
-        d_t_1 = self.last_overall_distances[self.kart_ix]
-        delta_d = d_t - d_t_1
-        pos_t = kart.position
-        f_t = 1 if kart.has_finished_race else 0
 
-        # Progression
-        progression_reward = 0.1 * delta_d
-        classement_reward = (1 - pos_t / K) * (3 + 7 * f_t)
-        finish_reward = 10 * f_t
-        time_penalty = -0.1
 
-        # Exploration
-        pos = tuple(np.round(kart.position, 1))
-        if not hasattr(self, "visited_positions"):
-            self.visited_positions = set()
-        exploration_bonus = 0.0
-        if pos not in self.visited_positions:
-            self.visited_positions.add(pos)
-            exploration_bonus = 0.2  # à ajuster
-
-        # Bugs
-        bug_bonus = 0.0
-        if hasattr(self, "last_info") and self.last_info is not None:
-            if self.last_info.get('bug_detected', False):
-                bug_bonus += 50.0  # stuck
-            if self.last_info.get('collision_detected', False):
-                bug_bonus += 50.0  # collision (si tu ajoutes ce wrapper)
-
-        self.last_overall_distances[self.kart_ix] = d_t
-
-        return (
-            progression_reward +
-            classement_reward +
-            finish_reward +
-            time_penalty +
-            exploration_bonus +
-            bug_bonus
-        )
 
 
 
 def main():
     os.makedirs("data_ia", exist_ok=True)
-    total_timesteps = 10000
+    total_timesteps = 100000
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
     agent_variants = create_agent_variants()
 
     temp_env = gym.make("supertuxkart/full-v0", agent=AgentSpec(use_ai=False))
     all_tracks = temp_env.unwrapped.TRACKS
-    all_tracks = ['abyss']
+    all_tracks = ['snowmountain']
     temp_env.close()
 
     for track in all_tracks:
@@ -265,7 +294,7 @@ def main():
             print(f"🚗 Agent : {agent_variant.name}")
             env = gym.make(
                 "supertuxkart/full-v0",
-                render_mode="human",
+                render_mode=None,
                 agent=AgentSpec(use_ai=False),
                 track=track  
             )
@@ -273,7 +302,7 @@ def main():
             # env = FPSDetectionWrapper(env, track_name=track)
             env = STKObservationWrapper(env)
             env = STKActionWrapper(env)
-            #env = CustomRewardWrapper(env)
+            env = CustomRewardWrapper(env)
             env = Monitor(env)
 
             save_path = f"data_ia/data_PPO_{track}"

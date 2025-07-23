@@ -15,6 +15,7 @@ class StuckDetectionWrapper(BaseDetectionWrapper):
         self.positions_history_maxlen = stuck_time * 30  # 30 fps (adapte si besoin)
         self.start_time = None
         self.track_name=track_name
+        self.start_time = None 
 
     def reset(self, **kwargs):
         self.start_time = time.time()
@@ -27,83 +28,58 @@ class StuckDetectionWrapper(BaseDetectionWrapper):
         obs, reward, terminated, truncated, info = self.env.step(action)
         kart_pos = obs["karts_position"][0]
         self.positions_history.append(np.array(kart_pos))
-
-       # print("clef de obs= ", list(obs.keys()))
-        #print("clef de info= ", list(info.keys()))
-        #print("env dir: ", dir(self.env))
-        #print("track_name in env: ", getattr(self.env, "track_name", None))
-
         if len(self.positions_history) > self.positions_history_maxlen:
             self.positions_history.pop(0)
 
-        # Ignore la détection pendant la période de grâce
-        if self.start_time is not None and (time.time() - self.start_time) < self.grace_period:
+        # Initialisation du timer
+        if self.start_time is None:
+            self.start_time = time.time()
+
+        # Période de grâce (ex. 3 secondes après le début)
+        if time.time() - self.start_time < self.grace_period:
+            info['bug_detected'] = False
             return obs, reward, terminated, truncated, info
 
         positions = np.array(self.positions_history)
-        xy_disp = np.max(np.linalg.norm(positions[-5:, :2] - positions[-1, :2], axis=1))  # dernier mouvement
-        z_disp = np.max(np.abs(positions[:, 2] - positions[0, 2]))
+        if len(positions) >= 30:
+            window = positions[-30:]
 
-        # Vitesse horizontale
-        velocity = obs.get("velocity")
-        if velocity is not None:
-            velocity = np.array(velocity)
-            if velocity.ndim == 1 and velocity.shape[0] >= 2:
-                speed_xy = np.linalg.norm(velocity[:2])
-                vx, vy, vz = velocity
-            elif velocity.ndim == 2 and velocity.shape[1] >= 2:
-                speed_xy = np.linalg.norm(velocity[0][:2])
-                vx, vy, vz = velocity[0]
+            # déplacement XY max entre frames
+            xy_disp = np.linalg.norm(window[0, :2] - window[-1, :2])
+            z_disp = np.max(np.abs(window[:, 2] - window[-1, 2]))
+
+            # vitesse horizontale instantanée
+            velocity = obs.get("velocity")
+            if velocity is not None:
+                v = np.array(velocity)
+                speed_xy = np.linalg.norm(v[0][:2] if v.ndim == 2 else v[:2])
             else:
                 speed_xy = 0.0
-                vx = vy = vz = 0.0
+
+            # compteur de frames bloquées
+            if speed_xy < 0.2 and xy_disp < 1.0:
+                self.stuck_counter = getattr(self, 'stuck_counter', 0) + 1
+            else:
+                self.stuck_counter = 0
+
+            stuck = self.stuck_counter > 3
+            #jump_on_spot = xy_disp < 1.0 and z_disp > 10.0
+            
+            info["speed_xy"] = speed_xy
+            info["xy_disp"] = xy_disp
+            info["stuck_counter"]= self.stuck_counter
+            info["stuck"] = stuck
+            #info["jump_on_spot"] = self.jump_on_spot
+            info["bug_detected"] = stuck # or jump_on_spot
+
+            if info["bug_detected"]:
+                print(f"🚨 BUG détecté: stuck={stuck}, jump_on_spot, "
+                    f"speed_xy={speed_xy:.2f}, xy_disp={xy_disp:.2f}, z_disp={z_disp:.2f}", )
         else:
-            speed_xy = 0.0
-            vx = vy = vz = 0.0
-
-        # Distance au centre du chemin
-        center_dist = abs(float(obs.get("center_path_distance", [0.0])[0]))
-
-        # Différence de hauteur entre le kart et le chemin
-        try:
-            kart_y = float(kart_pos[1])
-            path_y = float(obs["center_path"][1])
-            delta_z = abs(kart_y - path_y)
-        except Exception:
-            delta_z = 0.0
-
-        # Debug complet
-        print("\n=== INFO FRAME ===")
-        print(f"Kart position → x: {kart_pos[0]:.2f}, y: {kart_pos[1]:.2f}, z: {kart_pos[2]:.2f}")
-        print(f"Velocity      → vx: {vx:.3f}, vy: {vy:.3f}, vz: {vz:.3f}")
-        print(f"Speed XY      → {speed_xy:.3f}")
-        print(f"XY Disp       → {xy_disp:.2f}")
-        print(f"Z Disp        → {z_disp:.2f}")
-        print(f"Center Dist   → {center_dist:.2f}")
-        #print(f"Δ Hauteur vs Path → {delta_z:.2f}")
-
-        # Critères
-        stuck = speed_xy < 0.2 and xy_disp < 1
-        jump_on_spot = xy_disp < 1.0 and z_disp > 2.0
-        #off_track = center_dist > 10.0
-        #flying = delta_z > 3.0
-
-        # Résultats
-        info["bug_detected"] = stuck or jump_on_spot # or off_track or flying
-        info["stuck"] = stuck
-        info["jump_on_spot"] = jump_on_spot
-        #info["off_track"] = off_track
-        #info["flying"] = flying
-        
-
-        if info["bug_detected"]:
-            print("INFO complet :", info)
-            print(
-                f"⚠️  Bug détecté : "
-                f"{ {k: v for k, v in info.items() if (isinstance(v, (bool, np.bool_)) and v)} } "
-                f"à la position x={kart_pos[0]:.2f}, y={kart_pos[1]:.2f}, z={kart_pos[2]:.2f} "
-                f"track name={self.track_name}"
-            )
+            info["bug_detected"] = False
+            info["stuck"] = False
+            info["jump_on_spot"] = False
 
         return obs, reward, terminated, truncated, info
+
 

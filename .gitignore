@@ -9,7 +9,7 @@ venv/
 ppo_*
 dashboards/
 logs/
-bug_logs/
+
 models/
 documents/
 
