@@ -1,18 +1,15 @@
 import time
 import numpy as np
-from .base_detector import BaseDetectionWrapper  # adapte l'import si besoin
-
-
-import re
+from .base_detector import BaseDetectionWrapper 
 
 class StuckDetectionWrapper(BaseDetectionWrapper):
     def __init__(self, env, stuck_time=5, speed_threshold=0.1, grace_period=6,track_name=None):
         super().__init__(env)
         self.stuck_time = stuck_time
         self.speed_threshold = speed_threshold
-        self.grace_period = grace_period  # secondes à ignorer au début
+        self.grace_period = grace_period  # seconds to ignore at the beginning
         self.positions_history = []
-        self.positions_history_maxlen = stuck_time * 30  # 30 fps (adapte si besoin)
+        self.positions_history_maxlen = stuck_time * 30  # 30 fps 
         self.start_time = None
         self.track_name=track_name
         self.start_time = None 
@@ -31,11 +28,11 @@ class StuckDetectionWrapper(BaseDetectionWrapper):
         if len(self.positions_history) > self.positions_history_maxlen:
             self.positions_history.pop(0)
 
-        # Initialisation du timer
+        # Initialisation of timer
         if self.start_time is None:
             self.start_time = time.time()
 
-        # Période de grâce (ex. 3 secondes après le début)
+        # grace period (ex. 3 seconds after start)
         if time.time() - self.start_time < self.grace_period:
             info['bug_detected'] = False
             return obs, reward, terminated, truncated, info
@@ -44,11 +41,11 @@ class StuckDetectionWrapper(BaseDetectionWrapper):
         if len(positions) >= 30:
             window = positions[-30:]
 
-            # déplacement XY max entre frames
+            # move XY max each frames
             xy_disp = np.linalg.norm(window[0, :2] - window[-1, :2])
             z_disp = np.max(np.abs(window[:, 2] - window[-1, 2]))
 
-            # vitesse horizontale instantanée
+            # horizontal speed
             velocity = obs.get("velocity")
             if velocity is not None:
                 v = np.array(velocity)
@@ -56,8 +53,8 @@ class StuckDetectionWrapper(BaseDetectionWrapper):
             else:
                 speed_xy = 0.0
 
-            # compteur de frames bloquées
-            if speed_xy < 0.2 and xy_disp < 1.0:
+            # counter of stuck frames
+            if speed_xy < 0.2 and xy_disp < 0.7:
                 self.stuck_counter = getattr(self, 'stuck_counter', 0) + 1
             else:
                 self.stuck_counter = 0

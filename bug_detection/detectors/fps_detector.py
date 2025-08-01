@@ -18,13 +18,13 @@ class FPSDetectionWrapper(BaseDetectionWrapper):
         self.last_movement_log_time = None
         
         os.makedirs('bug_logs', exist_ok=True)
-        # Nouveau fichier de log à chaque lancement
+        # New log file at each launch
         log_filename = f"bug_logs/bug_log_fps_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         self.logger = BugLogger(log_file=log_filename)
         self.last_step_time = None
         self.last_log_time = None
         self.positions_history = []
-        self.positions_history_maxlen = 60  # Surveille les 60 dernières frames
+        self.positions_history_maxlen = 60  # Watch the last 60 frames
 
     def step(self, action):
         current_time = time.time()
@@ -38,11 +38,8 @@ class FPSDetectionWrapper(BaseDetectionWrapper):
             fps = 1.0 / elapsed if elapsed > 0 else None
 
         obs, reward, terminated, truncated, info = self.env.step(action)
-        #print("obs :", obs)
-        
-        #print("info : ", info)
 
-        # Récupération de la position du kart
+        # Get the kart position
         kart_pos = obs["karts_position"][0]
         self.positions_history.append(np.array(kart_pos))
         if len(self.positions_history) > self.positions_history_maxlen:
@@ -66,7 +63,7 @@ class FPSDetectionWrapper(BaseDetectionWrapper):
                             self.log_bug(fps, duration, kart_position)
                             print(f"\n🚨 BUG FPS détecté : FPS < {self.fps_threshold} pendant {duration:.1f} secondes")
 
-                        # Calcul du déplacement total
+                        # Calcul of total distance
                         total_distance = 0.0
                         for i in range(1, len(self.positions_history)):
                             total_distance += np.linalg.norm(self.positions_history[i] - self.positions_history[i - 1])
@@ -78,12 +75,12 @@ class FPSDetectionWrapper(BaseDetectionWrapper):
                                 print(f"Déplacement total pendant le bug FPS : {total_distance:.2f}")
                                 self.last_movement_log_time = now
                         else:
-                            # Si le kart recommence à bouger
+                            # If the kart starts to move again
                             if self.last_movement_log_time is not None:
                                 print("✅ Le kart a recommencé à bouger.")
                                 self.last_movement_log_time = None
             else:
-                # FPS revenu à la normale : reset
+                # FPS back to normal : reset
                 self.low_fps_start_time = None
                 self.bug_logged_for_track = False
                 self.last_log_time = None

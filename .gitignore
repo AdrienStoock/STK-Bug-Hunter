@@ -6,17 +6,13 @@ __pycache__/
 # Virtual environment
 venv/
 
-ppo_*
-dashboards/
+#logs 
 logs/
 
+#ia
+data_ia/
 models/
-documents/
 
-
-#cartpol 
-cartpol
-
-
+# test scripts
 test.py
 test_stk.py

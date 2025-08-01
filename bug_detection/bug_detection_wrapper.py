@@ -4,7 +4,7 @@ from gymnasium import Wrapper
 from .detectors.stuck_detector import StuckDetectionWrapper
 from .detectors.collision_detector import CollisionDetectionWrapper
 from .detectors.offtrack_detector import OffTrackDetectionWrapper
-# FPSDetectionWrapper peut être ajouté selon besoin
+
 
 class BugDetectionWrapper(Wrapper):
     """Wrapper principal qui combine toutes les détections"""

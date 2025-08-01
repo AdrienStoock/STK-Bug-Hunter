@@ -3,7 +3,7 @@
 from .base_detector import BaseDetectionWrapper
 
 class CollisionDetectionWrapper(BaseDetectionWrapper):
-    """Détection des collisions"""
+    """Detection of collisions"""
     def __init__(self, env):
         super().__init__(env)
         self.collision_points = []
