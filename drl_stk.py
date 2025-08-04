@@ -1,6 +1,7 @@
 # drl_stk.py
 from logging import info
 import os
+from types import NoneType
 import numpy as np
 import gymnasium as gym
 from stable_baselines3 import PPO
@@ -13,6 +14,7 @@ from pystk2_gymnasium.wrappers import FlattenerWrapper
 from bug_detection.detectors.fps_detector import FPSDetectionWrapper
 from bug_detection.detectors.stuck_detector import StuckDetectionWrapper
 from stable_baselines3.common.callbacks import EvalCallback
+import argparse
 
 
 class AgentVariant:
@@ -154,6 +156,7 @@ class CustomRewardWrapper(RewardWrapper):
         self.prev_obs = self.last_obs
         self.kart_ix = 0
         self.last_velocity = None
+        self.prev_distance = None
 
 
     def step(self, action):
@@ -162,91 +165,26 @@ class CustomRewardWrapper(RewardWrapper):
         self.last_obs = obs  
         self.last_info = info  
         self.last_time = time.time()
-        custom_reward = self.reward(reward)
+        custom_reward = self.reward()
         return obs, custom_reward, terminated, truncated, info
 
-    def reward(self, reward):
+    def reward(self):
 
-        # Reward officielle SuperTuxKart (basée sur le code source)
-        # r_t = (d_t - d_{t-1})/10 + (1 - pos_t/K) × (3 + 7f_t) - 0.1 + 10*f_t
-        
-        print(f"obs : {self.last_obs}")
-        print(f"info : {self.last_info}")
-        
-        # Récupération des données depuis les infos
-        # current_distance = self.last_info.get('distance', 0.0)
-        # current_position = self.last_info.get('position', 1)
-        # # Correction: récupérer le vrai nombre de karts depuis l'environnement
-        # total_karts = self.env.unwrapped.num_kart if hasattr(self.env.unwrapped, 'num_kart') else 3
-        # finished = self.last_info.get('finished', False)
-        
-        
-        # # Calcul de la progression (d_t - d_{t-1})
-        # if not hasattr(self, "last_distance"):
-        #     self.last_distance = current_distance
-        
-        # progress_delta = current_distance - self.last_distance
-        # self.last_distance = current_distance
-        
-        # # 1) Progression normalisée par 10
-        # progress_reward = progress_delta / 10.0
-        # reward += progress_reward
-        
-        # # 2) Bonus de position avec facteur de fin
-        # f_t = 1 if finished else 0
-        # position_bonus = (1.0 - current_position / total_karts) * (3 + 7 * f_t)
-        # reward += position_bonus
-        
-        # # 3) Pénalité constante
-        # reward -= 0.1
-        
-        # # 4) Bonus de fin
-        # if finished:
-        #     reward += 10.0
-
-        # # 5) Bonus de vitesse (encourage à se débloquer naturellement)
-        # speed_xy = self.last_info.get('speed_xy', 0.0)
-        # speed_bonus = 0.0  # Initialisation
-        # if speed_xy > 0.1:  # Bonus si vitesse > 0.1 (très accessible)
-        #     speed_bonus = speed_xy * 2.0  # Bonus plus fort pour encourager
-        #     reward += speed_bonus
-
-        # # Debug détaillé de la reward
-        # #print(f"DEBUG - progress_delta: {progress_delta:.3f}, position_bonus: {position_bonus:.3f}, speed_bonus: {speed_bonus:.3f}, final_reward: {reward:.3f}")
-            
-        return reward
-
-        
 
         # Récupère la distance au centre et la largeur de la piste
-        # center_dist = float(self.last_obs['continuous'][0])
-        # track_width = float(self.last_obs['continuous'][1])
-        # finished = 1 if self.env.unwrapped.world.karts[self.kart_ix].has_finished_race else 0
+        center_dist = float(self.last_obs['continuous'][0])
+        track_width = float(self.last_obs['continuous'][1])
+       
 
         # # Progression sur la piste (delta distance)
-        # d_t = max(0, self.env.unwrapped.world.karts[self.kart_ix].overall_distance)
-        # d_t_1 = self.last_overall_distances[self.kart_ix]
-        # delta_d = d_t - d_t_1
-        # self.last_overall_distances[self.kart_ix] = d_t
+        d_t = max(0, self.env.unwrapped.world.karts[self.kart_ix].overall_distance)
+        d_t_1 = self.last_overall_distances[self.kart_ix]
+        delta_d = d_t - d_t_1
+        self.last_overall_distances[self.kart_ix] = d_t
 
-        # # Récompense de centrage
-        # m1 = 0.1 * track_width
-        # m2 = 0.25 * track_width
-        # m3 = 0.5 * track_width
-
-        # if abs(center_dist) <= m1:
-        #     center_reward = 1.0
-        # elif abs(center_dist) <= m2:
-        #     center_reward = 0.5
-        # elif abs(center_dist) <= m3:
-        #     center_reward = 0.1
-        # else:
-        #     center_reward = 1e-3
-
-        # # Reward finale : progression + centrage + bonus arrivée
-        # # Pondération : progression (1.0), centrage (0.5), bonus arrivée (2.0)
-        # reward = 0.5 * center_reward + (delta_d/10) + 2.0 * finished
-        # return reward
+        # # Reward finale : progression 
+        reward = max(0.0, (delta_d / 10)) - 0.1
+        return reward
 
         
         # if self.last_obs is None or self.prev_obs is None:
@@ -336,10 +274,11 @@ def train_single_agent(env: gym.Env, agent_variant: AgentVariant, total_timestep
     print(f"Évaluation finale sur 1 épisode : reward total = {total_reward}")
 
 
+
 def play_best_model(track="olivermath", agent_name="explorer"):
     env = gym.make(
         "supertuxkart/full-v0",
-        render_mode="human",      
+        render_mode='human',      
         agent=AgentSpec(use_ai=False),
         track=track,
         laps=4
@@ -378,27 +317,25 @@ def play_best_model(track="olivermath", agent_name="explorer"):
 
 
 
-
-
-def main():
+def train(track,render_mode=None):
     os.makedirs("data_ia", exist_ok=True)
     total_timesteps = 20000
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
     agent_variants = create_agent_variants()
 
-    temp_env = gym.make("supertuxkart/full-v0", agent=AgentSpec(use_ai=False))
-    all_tracks = temp_env.unwrapped.TRACKS
-    all_tracks = ['olivermath']
-    temp_env.close()
+    if isinstance(track, str):
+        tracks = [track]
+    else:
+        tracks = track  # if we want to choose multiple tracks 
 
-    for track in all_tracks:
+    for track in tracks:
         print(f"\n🏁 Entraînement sur le track : {track}")
         for agent_variant in agent_variants:
             print(f"🚗 Agent : {agent_variant.name}")
             env = gym.make(
                 "supertuxkart/full-v0",
-                render_mode='human',
+                render_mode=render_mode,
                 agent=AgentSpec(use_ai=False),
                 track=track,
                 laps=4
@@ -416,6 +353,35 @@ def main():
             env.close()
 
 
+
+
 if __name__ == "__main__":
-    main()
-    #play_best_model()
+    import sys
+
+    def get_valid_tracks():
+        temp_env = gym.make("supertuxkart/full-v0", agent=AgentSpec(use_ai=False))
+        tracks = temp_env.unwrapped.TRACKS
+        temp_env.close()
+        return tracks
+
+    valid_tracks = get_valid_tracks()
+
+    parser = argparse.ArgumentParser(description="Select mode and track for STK training or playing.")
+    parser.add_argument("mode", choices=["train", "play_best_model"],help="Execution mode")
+    parser.add_argument("--track", required=True, help="Name of the track to use")
+    parser.add_argument("--render_mode",choices=["None", "human"],default="None",help="Render mode [None, 'human'] (default None)")
+    args = parser.parse_args()
+
+    valid_tracks = get_valid_tracks()
+    if args.track not in valid_tracks:
+        print(f"❌ Error: Track '{args.track}' is not valid. Valid tracks are:")
+        for t in valid_tracks:
+            print(f" - {t}")
+        sys.exit(1)
+
+    render_mode = None if args.render_mode == "None" else args.render_mode
+
+    if args.mode == "train":
+        train(args.track, render_mode=render_mode)
+    elif args.mode == "play_best_model":
+        play_best_model(args.track, agent_name=args.agent_name)
