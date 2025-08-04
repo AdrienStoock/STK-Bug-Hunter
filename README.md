@@ -26,17 +26,18 @@ pip install -r requirements.txt
 
 ## Running the code 
 
-###Train an agent on a specific track (e.g., olivermath):
+### Train an agent on a specific track (e.g., olivermath):
 ``` 
 python3 drl_stk.py train --track olivermath 
 ``` 
 
-###Play using the best saved model:
+### Play using the best saved model:
 ``` 
 python3 drl_stk.py play_best_model --track olivermath 
 ``` 
 
-###Command line arguments  
+### Command line arguments  
+
 - mode (mandatory): 
     - train : Allow the agent to train 
     - play_best_model : Allow to see the best model 
@@ -45,6 +46,7 @@ python3 drl_stk.py play_best_model --track olivermath
 
 ## AI Description
 This project uses the PPO algorithm from Stable-Baselines3 to train the agent.
+
 -Step 1 (Upcoming): Train the agent to play  
 -Step 2 (Upcoming): Train agent to detect bugs in tracks 
 
