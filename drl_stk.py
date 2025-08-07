@@ -29,7 +29,7 @@ class AgentVariant:
 class STKActionWrapper(gym.ActionWrapper):
     def __init__(self, env):
         super().__init__(env)
-        self.action_space = spaces.Discrete(12)
+        self.action_space = spaces.Discrete(16)
 
     def action(self, act):
         action = {
@@ -80,6 +80,21 @@ class STKActionWrapper(gym.ActionWrapper):
         elif act == 11:
             action["drift"] = 1
             action["acceleration"] = np.array([0.6])
+
+        elif act == 12: 
+            action["acceleration"] = np.array([0.2])
+            action["steer"] = np.array([-1.0])
+        elif act == 13: 
+            action["acceleration"] = np.array([0.2])
+            action["steer"] = np.array([1.0])
+        elif act == 14:  
+            action["drift"] = 1
+            action["steer"] = np.array([-1.0])
+            action["acceleration"] = np.array([0.5])
+        elif act == 15:  
+            action["drift"] = 1
+            action["steer"] = np.array([1.0])
+            action["acceleration"] = np.array([0.5])
 
         return action
 
@@ -138,7 +153,7 @@ def create_agent_variants() -> List[AgentVariant]:
             "explorer",
             learning_rate=1e-4,
             n_steps=2048,
-            ent_coef=0.02,   # encourage exploration
+            ent_coef=0.02,   
             clip_range=0.2   
         )
     ]
@@ -169,62 +184,27 @@ class CustomRewardWrapper(RewardWrapper):
         return obs, custom_reward, terminated, truncated, info
 
     def reward(self):
-
-
-        # Récupère la distance au centre et la largeur de la piste
-        center_dist = float(self.last_obs['continuous'][0])
-        track_width = float(self.last_obs['continuous'][1])
-       
-
-        # # Progression sur la piste (delta distance)
         d_t = max(0, self.env.unwrapped.world.karts[self.kart_ix].overall_distance)
         d_t_1 = self.last_overall_distances[self.kart_ix]
         delta_d = d_t - d_t_1
         self.last_overall_distances[self.kart_ix] = d_t
 
-        # # Reward finale : progression 
-        reward = max(0.0, (delta_d / 10)) - 0.1
-        return reward
-
+        speed = np.linalg.norm(self.last_obs['continuous'][3:6])
         
-        # if self.last_obs is None or self.prev_obs is None:
-        #     return reward 
+        progress_reward = delta_d / 3
+        speed_reward = speed * 0.05
 
-        # try:
-        #     d_t = max(0, self.env.unwrapped.world.karts[self.kart_ix].overall_distance)
-        #     d_t_1 = self.last_overall_distances[self.kart_ix]
-        #     delta_d = d_t - d_t_1
+        stuck_penalty = 0
+        if self.last_info.get('bug_detected', False):
+            stuck_penalty = 0.5
 
-        #     speed = self.last_obs['continuous'][0]
-        #     prev_speed = self.prev_obs['continuous'][0]
-        #     delta_speed = speed - prev_speed
-        #     speed_bonus = delta_speed if delta_speed > 0 else 0.0
-
-        #     finished = 1 if self.env.unwrapped.world.karts[self.kart_ix].has_finished_race else 0
-
-        #     #print(f"[DEBUG] Δdist={delta_d:.3f} | speed={speed:.2f} | +Δv={speed_bonus:.3f}")
-
-        #     reward = (
-        #         (delta_d / 10) +  # progression
-        #         speed_bonus +
-        #         (3 + 7 * finished) -
-        #         0.1
-        #     )
-
-        #     self.last_overall_distances[self.kart_ix] = d_t
-
-        #     return reward / 100  # lissage
-
-        # except Exception as e:
-        #     print(f"[ERROR] Exception dans reward(): {e}")
-        #     return reward
-
+        reward = progress_reward + speed_reward - stuck_penalty
+        return reward
 
 
 def train_single_agent(env: gym.Env, agent_variant: AgentVariant, total_timesteps: int, save_path: str, track: str):
     model = None
 
-    # Chargement si modèle existe déjà
     if os.path.exists(save_path + ".zip"):
         print(f"Chargement du modèle existant : {save_path}")
         model = PPO.load(save_path, env=env)
@@ -262,7 +242,7 @@ def train_single_agent(env: gym.Env, agent_variant: AgentVariant, total_timestep
 
     model.save(save_path)
 
-    # Evaluation 1 episode
+    #evaluate in 1 episode
     obs, _ = env.reset()
     done = False
     total_reward = 0
@@ -275,51 +255,48 @@ def train_single_agent(env: gym.Env, agent_variant: AgentVariant, total_timestep
 
 
 
-def play_best_model(track="olivermath", agent_name="explorer"):
+def play_best_model(track, agent_name="explorer"):
     env = gym.make(
         "supertuxkart/full-v0",
-        render_mode='human',      
+        render_mode='human',
         agent=AgentSpec(use_ai=False),
         track=track,
-        laps=4
+        laps=1
     )
     env = StuckDetectionWrapper(env, track_name=track)
     # env = FPSDetectionWrapper(env, track_name=track)
     env = STKObservationWrapper(env)
-    env = CustomRewardWrapper(env)
     env = STKActionWrapper(env)
-    
 
     model_path = f"./data_ia/{agent_name}_{track}_best_model/best_model.zip"
     if not os.path.exists(model_path):
         print(f"❌ Modèle non trouvé : {model_path}")
         return
-    model = PPO.load(model_path)
-    model.set_env(env)
+    model = PPO.load(model_path, env=env)
 
     obs, info = env.reset()
     done = False
-    total_reward = 0
     step_count = 0
 
     try:
         while not done:
             action, _ = model.predict(obs, deterministic=True)
-            print(f"Action choisie par la policy : {action}")
             obs, reward, terminated, truncated, info = env.step(action)
-            total_reward += reward
+            env.render() 
             done = terminated or truncated
             step_count += 1
     finally:
         env.close()
 
-    print(f"✅ Total reward avec best model : {total_reward} en {step_count} étapes")
+    print(f"✅ Course terminée en {step_count} étapes")
 
+
+from gymnasium.wrappers import TimeLimit
 
 
 def train(track,render_mode=None):
     os.makedirs("data_ia", exist_ok=True)
-    total_timesteps = 20000
+    total_timesteps = 200000
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
     agent_variants = create_agent_variants()
@@ -338,8 +315,9 @@ def train(track,render_mode=None):
                 render_mode=render_mode,
                 agent=AgentSpec(use_ai=False),
                 track=track,
-                laps=4
+                laps=1
             )
+            env = TimeLimit(env, max_episode_steps=2000)
             env = StuckDetectionWrapper(env, track_name=track)
             # env = FPSDetectionWrapper(env, track_name=track)
             env = STKObservationWrapper(env)
@@ -357,14 +335,12 @@ def train(track,render_mode=None):
 
 if __name__ == "__main__":
     import sys
-
+    print("Récupération des circuits...")
     def get_valid_tracks():
         temp_env = gym.make("supertuxkart/full-v0", agent=AgentSpec(use_ai=False))
         tracks = temp_env.unwrapped.TRACKS
         temp_env.close()
         return tracks
-
-    valid_tracks = get_valid_tracks()
 
     parser = argparse.ArgumentParser(description="Select mode and track for STK training or playing.")
     parser.add_argument("mode", choices=["train", "play_best_model"],help="Execution mode")
@@ -384,4 +360,5 @@ if __name__ == "__main__":
     if args.mode == "train":
         train(args.track, render_mode=render_mode)
     elif args.mode == "play_best_model":
-        play_best_model(args.track, agent_name=args.agent_name)
+        play_best_model(args.track)
+    
