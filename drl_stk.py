@@ -1,7 +1,6 @@
 # drl_stk.py
 from logging import info
 import os
-from types import NoneType
 import numpy as np
 import gymnasium as gym
 from stable_baselines3 import PPO
@@ -15,6 +14,7 @@ from bug_detection.detectors.fps_detector import FPSDetectionWrapper
 from bug_detection.detectors.stuck_detector import StuckDetectionWrapper
 from stable_baselines3.common.callbacks import EvalCallback
 import argparse
+from gymnasium.wrappers import TimeLimit
 
 
 class AgentVariant:
@@ -183,13 +183,48 @@ class CustomRewardWrapper(RewardWrapper):
         custom_reward = self.reward()
         return obs, custom_reward, terminated, truncated, info
 
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        # Reset internal state
+        try:
+            num_karts = self.env.unwrapped.num_kart
+        except Exception:
+            num_karts = 1
+        self.last_overall_distances = [0.0] * num_karts
+        self.last_obs = obs
+        self.prev_obs = None
+        self.last_info = info if isinstance(info, dict) else {}
+        
+        # Initialize previous track distance from observation if available
+        self._prev_track_distance = 0.0
+        if isinstance(obs, dict) and 'continuous' in obs and len(obs['continuous']) > 7:
+            try:
+                self._prev_track_distance = float(obs['continuous'][7])
+            except Exception:
+                self._prev_track_distance = 0.0
+        return obs, info
+
     def reward(self):
-        d_t = max(0, self.env.unwrapped.world.karts[self.kart_ix].overall_distance)
+        # Use world progress and speed to avoid index-order coupling
+        try:
+            d_t = max(0.0, float(self.env.unwrapped.world.karts[self.kart_ix].overall_distance))
+        except Exception:
+            d_t = 0.0
         d_t_1 = self.last_overall_distances[self.kart_ix]
         delta_d = d_t - d_t_1
         self.last_overall_distances[self.kart_ix] = d_t
 
-        speed = np.linalg.norm(self.last_obs['continuous'][3:6])
+        # Compute speed from observation: prefer scalar speed at index 3 when full layout is present,
+        # otherwise fall back to norm of velocity components at indices 3..5
+        speed = 0.0
+        cont = self.last_obs['continuous'] if (self.last_obs is not None and 'continuous' in self.last_obs) else None
+        if cont is not None:
+            if len(cont) > 6:
+                # Standard layout: [.., paths_width(2), speed(3), vx(4), vy(5), vz(6), distance(7), ..]
+                speed = float(cont[3])
+            elif len(cont) >= 6:
+                # Fallback: paths_width missing -> velocity likely at 3..5
+                speed = float(np.linalg.norm(np.array(cont[3:6], dtype=np.float32)))
         
         progress_reward = delta_d / 3
         speed_reward = speed * 0.05
@@ -204,6 +239,14 @@ class CustomRewardWrapper(RewardWrapper):
 
 def train_single_agent(env: gym.Env, agent_variant: AgentVariant, total_timesteps: int, save_path: str, track: str):
     model = None
+
+    # Ensure required directories exist
+    log_dir = f"./logs/{agent_variant.name}_{track}"
+    best_model_dir = f"./data_ia/{agent_variant.name}_{track}_best_model"
+    os.makedirs("./logs", exist_ok=True)
+    os.makedirs(log_dir, exist_ok=True)
+    os.makedirs(best_model_dir, exist_ok=True)
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
     if os.path.exists(save_path + ".zip"):
         print(f"Chargement du modèle existant : {save_path}")
@@ -220,15 +263,34 @@ def train_single_agent(env: gym.Env, agent_variant: AgentVariant, total_timestep
                 ent_coef=agent_variant.ent_coef,
                 clip_range=agent_variant.clip_range,
                 policy_kwargs=policy_kwargs,
-                tensorboard_log=f"./logs/{agent_variant.name}_{track}",
+                tensorboard_log=log_dir,
                 verbose=1
         )
+    
+    eval_env = gym.make(
+            "supertuxkart/full-v0",
+            render_mode=None,
+            agent=AgentSpec(use_ai=False),
+            track=track,
+            laps=1,
+    )
+    
+    # Match training wrapper order so obs/action/reward are identical
+    eval_env = TimeLimit(eval_env, max_episode_steps=2000)
+    eval_env = StuckDetectionWrapper(eval_env, track_name=track)
+    # eval_env = FPSDetectionWrapper(eval_env, track_name=track)
+    eval_env = STKObservationWrapper(eval_env)
+    eval_env = CustomRewardWrapper(eval_env)
+    eval_env = STKActionWrapper(eval_env)
+    eval_env = Monitor(eval_env)
+
 
     eval_callback = EvalCallback(
-        env,
-        best_model_save_path=f"./data_ia/{agent_variant.name}_{track}_best_model",
-        log_path=f"./logs/{agent_variant.name}_{track}",
-        n_eval_episodes=3,
+        eval_env,
+        best_model_save_path=best_model_dir,
+        log_path=log_dir,
+        n_eval_episodes=8,
+        eval_freq=10000,
         deterministic=True,
         render=False
     )
@@ -242,20 +304,30 @@ def train_single_agent(env: gym.Env, agent_variant: AgentVariant, total_timestep
 
     model.save(save_path)
 
-    #evaluate in 1 episode
+    # Evaluate best checkpoint if available, otherwise evaluate current model
+    best_model_path = os.path.join(best_model_dir, "best_model.zip")
+    eval_model = model
+    if os.path.exists(best_model_path):
+        try:
+            eval_model = PPO.load(best_model_path, env=env)
+            print(f"✅ Loading best model for evaluation : {best_model_path}")
+        except Exception as e:
+            print(f"⚠️ Impossible de charger le best model, fallback sur le modèle courant. Raison: {e}")
+
     obs, _ = env.reset()
     done = False
-    total_reward = 0
+    total_reward = 0.0
     while not done:
-        action, _states = model.predict(obs, deterministic=True)
+        action, _states = eval_model.predict(obs, deterministic=True)
         obs, reward, terminated, truncated, info = env.step(action)
         done = terminated or truncated
         total_reward += reward
-    print(f"Évaluation finale sur 1 épisode : reward total = {total_reward}")
+    print(f"Final episode on 1 episode : final reward  = {total_reward}")
 
 
 
 def play_best_model(track, agent_name="explorer"):
+
     env = gym.make(
         "supertuxkart/full-v0",
         render_mode='human',
@@ -263,9 +335,11 @@ def play_best_model(track, agent_name="explorer"):
         track=track,
         laps=1
     )
+    env = TimeLimit(env, max_episode_steps=3000)
     env = StuckDetectionWrapper(env, track_name=track)
     # env = FPSDetectionWrapper(env, track_name=track)
     env = STKObservationWrapper(env)
+    env = CustomRewardWrapper(env)
     env = STKActionWrapper(env)
 
     model_path = f"./data_ia/{agent_name}_{track}_best_model/best_model.zip"
@@ -288,15 +362,13 @@ def play_best_model(track, agent_name="explorer"):
     finally:
         env.close()
 
-    print(f"✅ Course terminée en {step_count} étapes")
+    print(f"✅ END !")
 
-
-from gymnasium.wrappers import TimeLimit
 
 
 def train(track,render_mode=None):
     os.makedirs("data_ia", exist_ok=True)
-    total_timesteps = 200000
+    total_timesteps = 10000
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
     agent_variants = create_agent_variants()
